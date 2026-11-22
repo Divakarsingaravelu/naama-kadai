@@ -1,0 +1,184 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// 1:1: User - VendorProfile (VendorProfile has the foreign key)
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         String // "CUSTOMER" | "VENDOR" | "ADMIN"
+  createdAt    DateTime @default(now())
+
+  // VendorProfile is linked via userId on VendorProfile side
+  // No explicit @relation on User; the relation is defined on VendorProfile
+  vendorProfile VendorProfile?
+  products      Product[]
+  cartItems     CartItem[]
+  orders        Order[]
+}
+
+model VendorProfile {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  shopName      String
+  slug          String   @unique
+  description   String   @default("")
+  logoUrl       String   @default("")
+  status        String @default("PENDING") // "PENDING" | "ACTIVE" | "SUSPENDED"
+  commissionBps Int      @default(1000) // 1000 = 10%; platformFeeCents = round(unitPriceCents * quantity * commissionBps / 10000)
+  createdAt     DateTime @default(now())
+
+  // Relation to User: userId on this model references id on User
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// 1:N: Category - Product (Category has many products)
+model Category {
+  id   String @id @default(cuid())
+  name String
+  slug String @unique
+
+  // Products linked via categoryId
+  products Product[]
+}
+
+// N:1: Product - Category (product has categoryId)
+model Product {
+  id          String   @id @default(cuid())
+  vendorId    String
+  categoryId  String? // nullable - category is optional
+  name        String
+  slug        String
+  description String   @default("")
+  priceCents  Int
+  stock       Int      @default(0)
+  status      String // "DRAFT" | "ACTIVE" | "ARCHIVED"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relation to User (vendor)
+  vendor     User           @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  // Relation to Category (optional)
+  category   Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  orderItems OrderItem[]
+  images     ProductImage[]
+  cartItems  CartItem[]
+
+  @@unique([vendorId, slug])
+}
+
+// 1:N: Product - ProductImage
+model ProductImage {
+  id        String @id @default(cuid())
+  productId String
+  url       String
+  position  Int    @default(0)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+// N:1: Product - CartItem (CartItem has productId)
+model CartItem {
+  id        String @id @default(cuid())
+  userId    String
+  productId String
+  quantity  Int    @default(1)
+
+  // Relation to User
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Relation to Product
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+}
+
+// 1:N: User - Address (User has many addresses)
+model Address {
+  id         String @id @default(cuid())
+  userId     String @unique
+  line1      String
+  line2      String @default("")
+  city       String
+  state      String
+  postalCode String
+  phone      String
+
+  // Relation to User
+}
+
+// 1:N: User - Order (User has many orders)
+model Order {
+  id                 String   @id @default(cuid())
+  customerId         String
+  paymentProvider    String  // "STRIPE" | "RAZORPAY"
+  status             String // "PENDING" | "PAID" | "PARTIALLY_FULFILLED" | "FULFILLED" | "CANCELLED" | "REFUNDED"
+  totalCents         Int
+  currency           String // "INR"
+  shippingLine1      String
+  shippingLine2      String   @default("")
+  shippingCity       String
+  shippingState      String
+  shippingPostalCode String
+  shippingPhone      String
+  createdAt          DateTime @default(now())
+
+  // Relation to User
+  customer User        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  items    OrderItem[]
+}
+
+// 1:N: Order - OrderItem (Order has many order items)
+model OrderItem {
+  id                String @id @default(cuid())
+  orderId           String
+  productId         String
+  vendorId          String
+  quantity          Int
+  unitPriceCents    Int
+  platformFeeCents  Int
+  vendorShareCents  Int
+  fulfillmentStatus String // "UNFULFILLED" | "SHIPPED" | "DELIVERED"
+
+  // Relations
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  // Vendor is linked via vendorId - relation defined on Product side conceptually
+  // We'll handle vendor lookups via product.vendorId
+}
+
+// 1:N: Order - Payment (Order has one Payment)
+model Payment {
+  id                String   @id @default(cuid())
+  orderId           String   @unique
+  provider          String // "STRIPE" | "RAZORPAY"
+  providerOrderId   String
+  providerPaymentId String // nullable
+  status            String // "CREATED" | "CAPTURED" | "FAILED" | "REFUNDED"
+  amountCents       Int
+  createdAt         DateTime @default(now())
+}
+
+// 1:N: Payment - Refund (Payment has one Refund)
+model Refund {
+  id               String   @id @default(cuid())
+  paymentId        String   @unique
+  amountCents      Int
+  reason           String
+  providerRefundId String // nullable
+  createdAt        DateTime @default(now())
+}
+
+// 1:N: WebhookEvent (no inverse needed)
+model WebhookEvent {
+  id          String   @unique // the provider's event ID
+  provider    String // "STRIPE" | "RAZORPAY"
+  type        String
+  processedAt DateTime @default(now())
+}
